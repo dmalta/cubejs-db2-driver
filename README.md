@@ -3,9 +3,9 @@
 A [Cube](https://cube.dev) data source driver for **IBM DB2 for z/OS** and **DB2 LUW**, built on
 [`ibm_db`](https://github.com/ibmdb/node-ibm_db).
 
-> Status: under active development. The read path (queries, streaming, schema introspection)
-> works against DB2 12 for z/OS and DB2 11.x LUW. The SQL dialect and pre-aggregation support
-> are in progress.
+> Status: under active development. Queries (both of Cube's planners), streaming and schema
+> introspection work against DB2 12 for z/OS and DB2 11.x LUW. Pre-aggregations stored in DB2 are
+> in progress; Cube Store pre-aggregations work today.
 
 ## Install
 
@@ -70,6 +70,18 @@ the CLI driver and leave the connection unencrypted.
 
 ## Known limitations
 
+- **Time zones.** DB2 for z/OS has no time zone database. A query's time zone is applied as its
+  *current* UTC offset: exact for fixed-offset zones (UTC, Asia/Kolkata, …), but rows on the
+  other side of a daylight-saving transition are shifted by the wrong hour. Store and query in
+  UTC where that matters.
+- **OFFSET on z/OS.** The default CLI packages run at application compatibility V10R1, which
+  has no `OFFSET`/`LIMIT` (`SQLCODE -4743`). `FETCH FIRST` limits work. For offsets, ask your
+  DBA for `EXECUTE` on a driver package collection bound at `APPLCOMPAT(V12R1M500)` or later,
+  and set `CUBEJS_DB_DB2_CURRENT_PACKAGE_SET` to it.
+- **`count_distinct_approx`** isn't supported: DB2 has no HyperLogLog functions.
+- **Long member names.** z/OS limits column names to 30 bytes. The driver rewrites longer
+  aliases in the SQL it runs and maps result columns back, so this is transparent, but the SQL
+  you see in logs differs from what runs.
 - **DECIMAL precision.** `ibm_db` fetches DECIMAL, NUMERIC and DECFLOAT as doubles, so values
   beyond ~15–17 significant digits lose precision. The driver returns them as strings, but the
   precision is already gone.

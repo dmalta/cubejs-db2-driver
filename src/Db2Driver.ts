@@ -24,6 +24,7 @@ import {
   maskConnectionString,
   readDb2Env,
 } from './connection';
+import { buildRowRenamer, shortenLongIdentifiers } from './aliases';
 import { describeError, isConnectionLost, isWarning } from './errors';
 import { Db2Connection, Db2Result, keepLoopAwake, loadIbmDb } from './ibm';
 import { Db2Query } from './Db2Query';
@@ -189,17 +190,19 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
     values: unknown[] = [],
     _options?: QueryOptions
   ): CancelablePromise<R[]> {
-    return this.execute(query, values, async (result) => (await this.readAll(result)).rows as R[]);
+    return this.execute(query, values, async (result, rename) => (await this.readAll(result, rename)).rows as R[]);
   }
 
   /**
    * Runs a statement and returns rows plus column types from the result metadata.
    */
   public queryWithTypes(query: string, values: unknown[] = []): CancelablePromise<{ rows: Record<string, unknown>[], types: TableStructure }> {
-    return this.execute(query, values, (result) => this.readAll(result));
+    return this.execute(query, values, (result, rename) => this.readAll(result, rename));
   }
 
-  public async stream(query: string, values: unknown[], { highWaterMark }: StreamOptions): Promise<StreamTableDataWithTypes> {
+  public async stream(sql: string, values: unknown[], { highWaterMark }: StreamOptions): Promise<StreamTableDataWithTypes> {
+    const { sql: query, restore } = shortenLongIdentifiers(sql);
+    const rename = buildRowRenamer(restore);
     const pc = await this.pool.acquire();
     let returned = false;
     const giveBack = async (error?: Error | null) => {
@@ -237,6 +240,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
     const rowStream = new QueryStream(
       result,
       buildRowTransform(meta),
+      rename,
       async (error) => {
         try {
           await giveBack(error);
@@ -249,7 +253,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
 
     return {
       rowStream,
-      types: metadataToTypes(meta),
+      types: renameTypes(metadataToTypes(meta), rename),
       release: async () => {
         if (!rowStream.destroyed && !rowStream.readableEnded) {
           rowStream.destroy();
@@ -403,10 +407,12 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
    * was lost; nothing else is ever retried.
    */
   protected execute<T>(
-    query: string,
+    sql: string,
     values: unknown[],
-    read: (result: Db2Result) => Promise<T>
+    read: (result: Db2Result, rename: ((row: Record<string, unknown>) => Record<string, unknown>) | null) => Promise<T>
   ): CancelablePromise<T> {
+    const { sql: query, restore } = shortenLongIdentifiers(sql);
+    const rename = buildRowRenamer(restore);
     let current: PooledConnection | null = null;
     let canceled = false;
 
@@ -420,10 +426,10 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
         }
         const [result] = await keepLoopAwake(() => pc.conn.queryResult(query, values));
         if (!result) {
-          return (await read(emptyResult())) as T;
+          return (await read(emptyResult(), rename)) as T;
         }
         try {
-          return await read(result);
+          return await read(result, rename);
         } finally {
           await closeQuietly(result);
         }
@@ -457,18 +463,34 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
     return promise;
   }
 
-  protected async readAll(result: Db2Result): Promise<{ rows: Record<string, unknown>[], types: TableStructure }> {
+  protected async readAll(
+    result: Db2Result,
+    rename: ((row: Record<string, unknown>) => Record<string, unknown>) | null
+  ): Promise<{ rows: Record<string, unknown>[], types: TableStructure }> {
     const meta = result.getColumnMetadataSync() || [];
     if (!meta.length) {
       return { rows: [], types: [] };
     }
-    const rows = await fetchAllRows(result);
+    let rows = await fetchAllRows(result);
     const transform = buildRowTransform(meta);
     if (transform) {
       rows.forEach(transform);
     }
-    return { rows, types: metadataToTypes(meta) };
+    if (rename) {
+      rows = rows.map(rename);
+    }
+    return { rows, types: renameTypes(metadataToTypes(meta), rename) };
   }
+}
+
+function renameTypes(
+  types: { name: string; type: string }[],
+  rename: ((row: Record<string, unknown>) => Record<string, unknown>) | null
+) {
+  if (!rename) {
+    return types;
+  }
+  return types.map(t => ({ ...t, name: Object.keys(rename({ [t.name]: null }))[0] }));
 }
 
 function emptyResult(): Db2Result {

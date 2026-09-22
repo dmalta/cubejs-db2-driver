@@ -14,6 +14,7 @@ export class QueryStream extends Readable {
   public constructor(
     result: Db2Result,
     private readonly transform: ((row: Record<string, unknown>) => void) | null,
+    private readonly rename: ((row: Record<string, unknown>) => Record<string, unknown>) | null,
     private readonly onClose: (error?: Error | null) => Promise<void>,
     highWaterMark?: number
   ) {
@@ -46,7 +47,7 @@ export class QueryStream extends Readable {
       if (this.transform) {
         this.transform(row);
       }
-      this.push(row);
+      this.push(this.rename ? this.rename(row) : row);
     }
 
     if (batch.done) {
