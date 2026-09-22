@@ -178,9 +178,15 @@ export class Db2Query extends BaseQuery {
     return `((CAST(DAYS(${now}) AS BIGINT) - DAYS('1970-01-01')) * 86400 + MIDNIGHT_SECONDS(${now}))`;
   }
 
-  /** DB2 has no SELECT without FROM. */
+  /**
+   * DB2 has no SELECT without FROM. Cube also renders refresh keys meant for
+   * Cube Store through this method (with Cube Store's own expression, e.g.
+   * UNIX_TIMESTAMP()), so the FROM clause is added only to DB2 expressions:
+   * those are all built on CURRENT TIMESTAMP (see nowTimestampSql).
+   */
   public refreshKeySelect(sql: string): string {
-    return `SELECT ${sql} AS ${this.escapeColumnName('refresh_key')} FROM ${DUMMY}`;
+    const select = `SELECT ${sql} AS ${this.escapeColumnName('refresh_key')}`;
+    return /\bCURRENT\s+TIMESTAMP\b/i.test(sql) ? `${select} FROM ${DUMMY}` : select;
   }
 
   /**

@@ -44,6 +44,12 @@ describe('Db2Query SQL generation', () => {
     expect(sql).toContain('CURRENT TIMESTAMP - CURRENT TIMEZONE');
   });
 
+  it('leaves Cube Store refresh keys (rendered through this dialect) without a DB2 FROM clause', async () => {
+    const query = await queryFor({ measures: ['orders.count'] }, 'legacy');
+    expect(query.refreshKeySelect('FLOOR((UNIX_TIMESTAMP()) / 3600)')).toBe('SELECT FLOOR((UNIX_TIMESTAMP()) / 3600) AS "refresh_key"');
+    expect(query.refreshKeySelect(`FLOOR((${query.unixTimestampSql()}) / 3600)`)).toMatch(/FROM SYSIBM\.SYSDUMMY1$/);
+  });
+
   it('shifts timestamps by the zone offset for convertTz', async () => {
     const utc = await queryFor({ measures: ['orders.count'], timezone: 'UTC' }, 'legacy');
     expect(utc.convertTz('x')).toBe('x');

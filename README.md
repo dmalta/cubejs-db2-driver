@@ -3,9 +3,9 @@
 A [Cube](https://cube.dev) data source driver for **IBM DB2 for z/OS** and **DB2 LUW**, built on
 [`ibm_db`](https://github.com/ibmdb/node-ibm_db).
 
-> Status: under active development. Queries (both of Cube's planners), streaming and schema
-> introspection work against DB2 12 for z/OS and DB2 11.x LUW. Pre-aggregations stored in DB2 are
-> in progress; Cube Store pre-aggregations work today.
+> Status: pre-release. Validated against DB2 12 for z/OS and DB2 11.x LUW with Cube 1.7: REST
+> and SQL API queries through both of Cube's planners, the Playground, and pre-aggregations in
+> Cube Store or in DB2 itself.
 
 ## Install
 
@@ -61,9 +61,28 @@ license.
 | `CUBEJS_DB_DB2_CURRENT_SCHEMA` | default schema for unqualified names |
 | `CUBEJS_DB_DB2_CURRENT_PACKAGE_SET` | driver package collection, e.g. one bound at a higher `APPLCOMPAT` (z/OS) |
 | `CUBEJS_DB_DB2_CONNECT_TIMEOUT` | seconds (default 30) |
+| `CUBEJS_DB_DB2_SCHEMAS` | comma-separated schemas to introspect (Playground, data model generation). A z/OS catalog can hold tens of thousands of tables: all 37K took 55 s, one schema 4 s |
 | `CUBEJS_DB_DB2_EXTRA` | raw `KEY=VALUE;…` CLI keywords appended to the connection string |
 
 With multiple data sources, each variable is read as `CUBEJS_DS_<NAME>_…` in the usual Cube way.
+For example, a z/OS default data source plus an LUW one:
+
+```dotenv
+CUBEJS_DATASOURCES=default,luw
+
+CUBEJS_DB_TYPE=db2
+CUBEJS_DB_HOST=zos.example.com
+CUBEJS_DB_PORT=447
+CUBEJS_DB_NAME=LOCATION1
+CUBEJS_DB_DB2_SSL_SERVER_CERTIFICATE=/certs/root_ca.pem
+
+CUBEJS_DS_LUW_DB_TYPE=db2
+CUBEJS_DS_LUW_DB_HOST=luw.example.com
+CUBEJS_DS_LUW_DB_PORT=50000
+CUBEJS_DS_LUW_DB_NAME=SAMPLE
+```
+
+(plus the `USER`/`PASS` pair for each), and `data_source: luw` on the LUW cubes.
 
 Use CLI keywords only: JDBC-style keywords such as `sslConnection=true` are silently ignored by
 the CLI driver and leave the connection unencrypted.

@@ -45,6 +45,7 @@ export const DB2_ENV_VARIABLES = {
   currentPackageSet: 'CUBEJS_DB_DB2_CURRENT_PACKAGE_SET',
   extra: 'CUBEJS_DB_DB2_EXTRA',
   connectTimeout: 'CUBEJS_DB_DB2_CONNECT_TIMEOUT',
+  schemas: 'CUBEJS_DB_DB2_SCHEMAS',
   preAggregationDatabase: 'CUBEJS_DB_DB2_PREAGG_DATABASE',
   preAggregationTablespace: 'CUBEJS_DB_DB2_PREAGG_TABLESPACE',
 } as const;

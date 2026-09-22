@@ -47,6 +47,11 @@ export type Db2DriverConfiguration = Db2ConnectionConfig & {
   preAggregationDatabase?: string;
   /** Tablespace for pre-aggregation tables. */
   preAggregationTablespace?: string;
+  /**
+   * Schemas to introspect (Playground, data model generation). A z/OS catalog
+   * can hold tens of thousands of tables; all non-system schemas by default.
+   */
+  schemas?: string[];
 };
 
 interface PooledConnection {
@@ -146,6 +151,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
       // these are read without the CUBEJS_PRE_AGGREGATIONS_ prefix.
       preAggregationDatabase: readDb2Env('preAggregationDatabase', dataSource, false),
       preAggregationTablespace: readDb2Env('preAggregationTablespace', dataSource, false),
+      schemas: parseSchemaList(readDb2Env('schemas', dataSource, false)),
       connectTimeout: envTimeout ? parseInt(envTimeout, 10) : 30,
       maxConnectionAgeMs: DEFAULT_MAX_CONNECTION_AGE_MS,
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
@@ -324,6 +330,15 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
 
   // ------------------------------------------------------------------ catalog
 
+  /** `IN (...)` for the configured schemas, or the system-schema exclusion. */
+  protected schemaFilter(column: string): string {
+    const { schemas } = this.config;
+    if (schemas && schemas.length) {
+      return `${column} IN (${schemas.map(s => `'${s.replace(/'/g, "''")}'`).join(', ')})`;
+    }
+    return `${column} ${SYSTEM_SCHEMA_FILTER}`;
+  }
+
   protected informationSchemaQuery(): string {
     return `
       SELECT RTRIM(c.NAME) AS ${this.quoteIdentifier('column_name')},
@@ -332,7 +347,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
              RTRIM(c.COLTYPE) AS ${this.quoteIdentifier('data_type')}
       FROM SYSIBM.SYSCOLUMNS c
       JOIN SYSIBM.SYSTABLES t ON t.CREATOR = c.TBCREATOR AND t.NAME = c.TBNAME
-      WHERE t.TYPE IN ${TABLE_TYPES} AND c.TBCREATOR ${SYSTEM_SCHEMA_FILTER}
+      WHERE t.TYPE IN ${TABLE_TYPES} AND ${this.schemaFilter('c.TBCREATOR')}
       WITH UR
     `;
   }
@@ -342,7 +357,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
     return `
       SELECT DISTINCT RTRIM(CREATOR) AS ${this.quoteIdentifier('schema_name')}
       FROM SYSIBM.SYSTABLES
-      WHERE TYPE IN ${TABLE_TYPES} AND CREATOR ${SYSTEM_SCHEMA_FILTER}
+      WHERE TYPE IN ${TABLE_TYPES} AND ${this.schemaFilter('CREATOR')}
       WITH UR
     `;
   }
@@ -657,6 +672,12 @@ export function columnDefinitionType(c: Db2ColumnMetadata): string {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 'A, b ,C' → ['A', 'B', 'C'] (folded like unquoted identifiers); undefined when empty. */
+export function parseSchemaList(value: string | undefined): string[] | undefined {
+  const list = (value || '').split(',').map(s => s.trim()).filter(Boolean).map(foldIdentifier);
+  return list.length ? list : undefined;
 }
 
 /** A single identifier as DB2 stores it: quoted keeps case, unquoted folds up. */

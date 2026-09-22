@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { Db2Driver, isReadOnlyStatement, splitTableName, wrapWithFetchFirst } from '../../src/Db2Driver';
+import { Db2Driver, isReadOnlyStatement, parseSchemaList, splitTableName, wrapWithFetchFirst } from '../../src/Db2Driver';
 import { Db2Query } from '../../src/Db2Query';
 import { setIbmDbModule } from '../../src/ibm';
 import { baseConfig, col, db2Error, Handler, mockIbmDb } from './mock-ibm';
@@ -185,6 +185,17 @@ describe('Db2Driver SQL shapes', () => {
     expect(sqls).toMatch(/FROM SYSIBM\.SYSTABLES/);
     expect(sqls).toMatch(/c\.TBCREATOR = \? AND c\.TBNAME IN \(\?\)/);
     expect(connections[0].statements[2].params).toEqual(['APP', 'T1']);
+  });
+
+  it('restricts introspection to CUBEJS_DB_DB2_SCHEMAS when set', async () => {
+    const { driver: d, connections } = makeDriver(() => ({ meta: [], rows: [] }), { schemas: ['SALES', "O'NEIL"] });
+    await d.getSchemas();
+    await d.tablesSchema();
+    const sqls = connections[0].statements.map(s => s.sql);
+    expect(sqls[0]).toMatch(/CREATOR IN \('SALES', 'O''NEIL'\)/);
+    expect(sqls[1]).toMatch(/c\.TBCREATOR IN \('SALES', 'O''NEIL'\)/);
+    expect(parseSchemaList(' sales, "Mixed" ,,')).toEqual(['SALES', 'Mixed']);
+    expect(parseSchemaList('')).toBeUndefined();
   });
 
   it('resolves table names the way DB2 folds identifiers', async () => {
