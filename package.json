@@ -1,0 +1,60 @@
+{
+  "name": "@dmalta/db2-cubejs-driver",
+  "description": "Cube data source driver for IBM DB2 for z/OS and DB2 LUW",
+  "version": "0.1.0",
+  "author": "Daniel Maltarollo <daniel@maltarollo.net>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmalta/cubejs-db2-driver.git"
+  },
+  "keywords": [
+    "cube",
+    "cubejs",
+    "db2",
+    "z/os",
+    "ibm_db",
+    "driver"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist/src",
+    "index.js"
+  ],
+  "main": "index.js",
+  "typings": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "require": "./index.js",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "DB2_REAL_TEST=true vitest run --project integration",
+    "prepublishOnly": "npm run build && npm run test:unit"
+  },
+  "dependencies": {
+    "@cubejs-backend/base-driver": "^1.7.43",
+    "@cubejs-backend/schema-compiler": "^1.7.43",
+    "@cubejs-backend/shared": "^1.7.43"
+  },
+  "optionalDependencies": {
+    "ibm_db": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "allowScripts": {
+    "ibm_db@4.0.1": true
+  }
+}

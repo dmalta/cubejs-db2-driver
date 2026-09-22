@@ -1,0 +1,7 @@
+{
+  "vitest.rootConfig": "vitest.config.mjs",
+  "vitest.nodeEnv": {
+    "DB2_REAL_TEST": "false"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib"
+}
