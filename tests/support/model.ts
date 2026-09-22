@@ -113,6 +113,25 @@ cube('orders', {
   },
 });
 
+// Same data as orders, with a pre-aggregation stored in DB2 itself. A
+// separate cube, so the dialect cases on \`orders\` never match a rollup.
+cube('orders_pa', {
+  extends: orders,
+  pre_aggregations: {
+    by_status_month: {
+      type: 'rollup',
+      external: false,
+      measures: [CUBE.count, CUBE.total_amount, CUBE.a_measure_with_a_really_quite_long_name_for_aliases],
+      dimensions: [CUBE.status],
+      time_dimension: CUBE.created_at,
+      granularity: 'month',
+      indexes: {
+        by_status: { columns: [CUBE.status] },
+      },
+    },
+  },
+});
+
 cube('line_items', {
   sql: \`${lineItemsSql()}\`,
   measures: {
@@ -171,4 +190,36 @@ export async function buildSql(query: Record<string, unknown>, planner: Planner)
 export async function queryFor(query: Record<string, unknown>, planner: Planner): Promise<any> {
   const c = await compilers();
   return new Db2Query(c, options(query, planner));
+}
+
+export interface PreAggregationPlan {
+  /** Unversioned table name, e.g. `schema.orders_pa_by_status_month`. */
+  tableName: string;
+  loadSql: [string, unknown[]];
+  indexesSql: { indexName: string; sql: [string, unknown[]] }[];
+  /** The query's own SQL, reading from `tableName`. */
+  querySql: [string, unknown[]];
+}
+
+/**
+ * What Cube's orchestrator receives for a query served by a pre-aggregation:
+ * its build SQL and the query that reads it.
+ */
+export async function preAggregationPlan(
+  query: Record<string, unknown>,
+  planner: Planner,
+  preAggregationsSchema: string
+): Promise<PreAggregationPlan> {
+  const c = await compilers();
+  const q = new Db2Query(c, { ...options(query, planner), preAggregationsSchema });
+  const [description] = q.preAggregations.preAggregationsDescription();
+  if (!description) {
+    throw new Error('Query is not served by a pre-aggregation');
+  }
+  return {
+    tableName: description.tableName,
+    loadSql: description.loadSql,
+    indexesSql: description.indexesSql,
+    querySql: q.buildSqlAndParams(),
+  };
 }

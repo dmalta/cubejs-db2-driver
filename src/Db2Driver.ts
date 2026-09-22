@@ -25,8 +25,8 @@ import {
   readDb2Env,
 } from './connection';
 import { buildRowRenamer, shortenLongIdentifiers } from './aliases';
-import { describeError, isConnectionLost, isWarning } from './errors';
-import { Db2Connection, Db2Result, keepLoopAwake, loadIbmDb } from './ibm';
+import { describeError, isConnectionLost, isObjectNotFound, isWarning } from './errors';
+import { Db2ColumnMetadata, Db2Connection, Db2Result, keepLoopAwake, loadIbmDb } from './ibm';
 import { Db2Query } from './Db2Query';
 import { closeQuietly, QueryStream } from './QueryStream';
 import { buildRowTransform, colTypeToGeneric, fetchAllRows, metadataToTypes } from './rows';
@@ -43,6 +43,10 @@ export type Db2DriverConfiguration = Db2ConnectionConfig & {
   /** Idle connections are closed after this long (ms). */
   idleTimeoutMs?: number;
   readOnly?: boolean;
+  /** z/OS database for pre-aggregation tables (`IN <database>.<tablespace>`). */
+  preAggregationDatabase?: string;
+  /** Tablespace for pre-aggregation tables. */
+  preAggregationTablespace?: string;
 };
 
 interface PooledConnection {
@@ -64,6 +68,22 @@ const SYSTEM_SCHEMA_FILTER = `NOT IN (${SYSTEM_SCHEMAS.map(s => `'${s}'`).join('
 
 /** Table types exposed to Cube: tables and views (aliases would duplicate their targets). */
 const TABLE_TYPES = "('T', 'V')";
+
+/** Cube generic type → DB2 column type, for tables Cube creates (uploads, tests). */
+const GENERIC_TO_DB2: Record<string, string> = {
+  string: 'VARCHAR(4000)',
+  text: 'VARCHAR(4000)',
+  boolean: 'SMALLINT',
+  int: 'INTEGER',
+  bigint: 'BIGINT',
+  float: 'DOUBLE',
+  double: 'DOUBLE',
+  decimal: 'DECIMAL(31,10)',
+  timestamp: 'TIMESTAMP',
+  date: 'DATE',
+  time: 'TIME',
+  uuid: 'CHAR(36)',
+};
 
 const DEFAULT_MAX_CONNECTION_AGE_MS = 30 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -122,6 +142,10 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
 
     this.config = {
       ...connectionConfigFromEnv(dataSource, preAggregations),
+      // Where pre-aggregation tables go is a property of the data source, so
+      // these are read without the CUBEJS_PRE_AGGREGATIONS_ prefix.
+      preAggregationDatabase: readDb2Env('preAggregationDatabase', dataSource, false),
+      preAggregationTablespace: readDb2Env('preAggregationTablespace', dataSource, false),
       connectTimeout: envTimeout ? parseInt(envTimeout, 10) : 30,
       maxConnectionAgeMs: DEFAULT_MAX_CONNECTION_AGE_MS,
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
@@ -365,14 +389,93 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
     `;
   }
 
+  /**
+   * Lists a schema's tables for Cube's pre-aggregation loader, which finds
+   * its tables by comparing these names with the lowercase, unquoted names it
+   * created them with. DB2 folds those to upper case, so folded names are
+   * returned in lower case again: otherwise the loader would never recognise
+   * a built pre-aggregation, and would drop it as an orphan.
+   */
   public async getTablesQuery(schemaName: string) {
-    return this.query<{ table_name: string }>(
+    const rows = await this.query<{ table_name: string }>(
       `SELECT RTRIM(NAME) AS ${this.quoteIdentifier('table_name')}
        FROM SYSIBM.SYSTABLES
        WHERE TYPE IN ${TABLE_TYPES} AND CREATOR = ?
        WITH UR`,
-      [schemaName]
+      [foldIdentifier(schemaName)]
     );
+    return rows.map(r => ({ table_name: r.table_name === r.table_name.toUpperCase() ? r.table_name.toLowerCase() : r.table_name }));
+  }
+
+  /**
+   * Builds a pre-aggregation table stored in DB2 (`external: false`).
+   *
+   * Cube's load SQL is `CREATE TABLE <t> AS <select>`, which DB2 for z/OS
+   * has no form of (only CREATE ... AS (...) WITH NO DATA, which in turn
+   * accepts no parameter markers and fails when source and target encodings
+   * differ). So: describe the select, create the table with explicit
+   * columns in the configured database/tablespace, then INSERT ... SELECT.
+   */
+  public async loadPreAggregationIntoTable(
+    preAggregationTableName: string,
+    loadSql: string,
+    params: unknown[],
+    _options: unknown
+  ): Promise<unknown[]> {
+    const prefix = new RegExp(`^\\s*CREATE\\s+TABLE\\s+${escapeRegExp(preAggregationTableName)}\\s+AS\\s+`, 'i');
+    if (!prefix.test(loadSql)) {
+      throw new Error(`Unexpected pre-aggregation load SQL for ${preAggregationTableName}: ${loadSql.slice(0, 200)}`);
+    }
+    const select = loadSql.replace(prefix, '');
+    const columns = await this.describeColumns(select, params);
+
+    await this.query(this.createTableFromColumnsSql(preAggregationTableName, columns), []);
+    try {
+      await this.query(`INSERT INTO ${preAggregationTableName} ${select}`, params);
+    } catch (e) {
+      await this.dropTable(preAggregationTableName).catch(() => undefined);
+      throw e;
+    }
+    return [];
+  }
+
+  public async dropTable(tableName: string, options?: QueryOptions): Promise<unknown> {
+    try {
+      return await this.query(`DROP TABLE ${tableName}`, [], options);
+    } catch (e) {
+      if (isObjectNotFound(e)) {
+        return [];
+      }
+      throw e;
+    }
+  }
+
+  /** `IN db.ts`, `IN ts` or `IN DATABASE db`, per the configured target. */
+  protected tableSpaceClause(): string {
+    const { preAggregationDatabase: db, preAggregationTablespace: ts } = this.config;
+    if (db && ts) return ` IN ${db}.${ts}`;
+    if (ts) return ` IN ${ts}`;
+    if (db) return ` IN DATABASE ${db}`;
+    return '';
+  }
+
+  protected createTableFromColumnsSql(tableName: string, columns: Db2ColumnMetadata[]): string {
+    const definitions = columns.map(c => `${this.quoteIdentifier(c.SQL_DESC_NAME)} ${columnDefinitionType(c)}`);
+    return `CREATE TABLE ${tableName} (${definitions.join(', ')})${this.tableSpaceClause()}`;
+  }
+
+  /**
+   * Result-set metadata of a query, without fetching rows. Column names are
+   * the query's own (long aliases restored).
+   */
+  public describeColumns(sql: string, params: unknown[]): Promise<Db2ColumnMetadata[]> {
+    return this.execute(`SELECT * FROM (${sql}) AS "q" WHERE 1 = 0`, params, async (result, rename) => {
+      const meta = result.getColumnMetadataSync() || [];
+      return meta.map(m => ({
+        ...m,
+        SQL_DESC_NAME: rename ? Object.keys(rename({ [m.SQL_DESC_NAME]: null }))[0] : m.SQL_DESC_NAME,
+      }));
+    });
   }
 
   public async tableColumnTypes(table: string): Promise<TableStructure> {
@@ -393,6 +496,10 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
     // DB2 creates schemas implicitly with the first object qualified by them
     // (subject to the IMPLICIT_SCHEMA / CREATEIN authority), and z/OS has no
     // CREATE SCHEMA statement for dynamic SQL. Nothing to do here.
+  }
+
+  protected fromGenericType(columnType: string): string {
+    return GENERIC_TO_DB2[columnType.toLowerCase()] || super.fromGenericType(columnType);
   }
 
   protected toGenericType(columnType: string, precision?: number | null, scale?: number | null): string {
@@ -500,6 +607,61 @@ function emptyResult(): Db2Result {
     close: async () => true,
     closeSync: () => undefined,
   };
+}
+
+/**
+ * DB2 column type for a result column described by ibm_db. DECIMAL reports
+ * precision 0; it is recovered from the display length (sign and point).
+ */
+export function columnDefinitionType(c: Db2ColumnMetadata): string {
+  const type = c.SQL_DESC_TYPE_NAME.toUpperCase();
+  const length = c.SQL_DESC_LENGTH;
+  const scale = c.SQL_DESC_SCALE || 0;
+  switch (type) {
+    case 'CHAR':
+    case 'CHARACTER':
+      return `CHAR(${Math.max(1, Math.min(length, 255))})`;
+    case 'VARCHAR':
+      return `VARCHAR(${Math.max(1, length)})`;
+    case 'GRAPHIC':
+      return `GRAPHIC(${Math.max(1, length)})`;
+    case 'VARGRAPHIC':
+      return `VARGRAPHIC(${Math.max(1, length)})`;
+    case 'DECIMAL':
+    case 'NUMERIC': {
+      const precision = c.SQL_DESC_PRECISION || length - (scale > 0 ? 2 : 1);
+      return `DECIMAL(${Math.max(1, Math.min(31, precision))},${scale})`;
+    }
+    case 'DECFLOAT':
+      return length > 16 ? 'DECFLOAT(34)' : 'DECFLOAT(16)';
+    case 'TIMESTAMP':
+      return `TIMESTAMP(${scale})`;
+    case 'SMALLINT':
+    case 'INTEGER':
+    case 'BIGINT':
+    case 'REAL':
+    case 'DOUBLE':
+    case 'DATE':
+    case 'TIME':
+      return type;
+    case 'FLOAT':
+      return 'DOUBLE';
+    case 'CLOB':
+    case 'BLOB':
+    case 'DBCLOB':
+      return `${type}(${Math.max(1, length)})`;
+    default:
+      return `VARCHAR(${Math.max(1, Math.min(length || 255, 32704))})`;
+  }
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** A single identifier as DB2 stores it: quoted keeps case, unquoted folds up. */
+export function foldIdentifier(name: string): string {
+  return name.startsWith('"') ? name.slice(1, -1).replace(/""/g, '"') : name.toUpperCase();
 }
 
 /**

@@ -68,6 +68,36 @@ With multiple data sources, each variable is read as `CUBEJS_DS_<NAME>_…` in t
 Use CLI keywords only: JDBC-style keywords such as `sslConnection=true` are silently ignored by
 the CLI driver and leave the connection unencrypted.
 
+## Pre-aggregations
+
+Two options, per pre-aggregation:
+
+- **In Cube Store** (the default, `external: true`). Works with read-only DB2 access: Cube runs
+  the rollup query and streams the rows out.
+- **In DB2 itself** (`external: false`). The rollup lives in a DB2 table next to its source
+  data. This needs write access:
+
+  | Variable | Purpose |
+  |---|---|
+  | `CUBEJS_PRE_AGGREGATIONS_SCHEMA` | schema for the tables (you need `CREATEIN`, or implicit-schema authority) |
+  | `CUBEJS_DB_DB2_PREAGG_DATABASE` | z/OS: database for the tables |
+  | `CUBEJS_DB_DB2_PREAGG_TABLESPACE` | tablespace for the tables |
+
+  Tables are created `IN <database>.<tablespace>` (or `IN <tablespace>`, or
+  `IN DATABASE <database>`, depending on what's set).
+
+  On z/OS, ask your DBA for a **dedicated database** for pre-aggregations. `CREATE TABLE` needs
+  an exclusive lock on the database descriptor, and in a database shared with other
+  applications it can wait minutes for their work to commit. The driver is tested with a classic
+  segmented tablespace, which holds many tables; repeated build/drop cycles don't leave it
+  REORG-pending. A universal (UTS) tablespace holds only one table, so it doesn't suit a
+  schema of versioned pre-aggregation tables.
+
+DB2 for z/OS has no `CREATE TABLE … AS SELECT` with data, so the driver builds each table in
+three steps: describe the rollup query, `CREATE TABLE` with explicit columns, then
+`INSERT … SELECT`. This also works when the source tables are Unicode and the target tablespace
+is EBCDIC (or the reverse), which `CREATE TABLE … AS (…) WITH NO DATA` doesn't.
+
 ## Known limitations
 
 - **Time zones.** DB2 for z/OS has no time zone database. A query's time zone is applied as its
@@ -87,8 +117,9 @@ the CLI driver and leave the connection unencrypted.
   precision is already gone.
 - **Cancellation.** `ibm_db` can't interrupt a running statement. A canceled query's connection
   is discarded instead of reused, and the server-side work runs to completion.
-- **Node 26.** Node 26 delays `ibm_db` completions while long timers are pending. The driver works
-  around it, but Node 24 is the tested runtime.
+- **Node 26.** Node 26 delays `ibm_db` completions while long timers are pending (every new
+  connection took ~30 s). The driver works around it, and its test suites run on Node 26. Node 24
+  doesn't have the problem.
 
 ## Development
 

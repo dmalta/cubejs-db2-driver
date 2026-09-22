@@ -110,7 +110,8 @@ describe.skipIf(!REAL)('Db2Driver against real DB2', () => {
         expect(columns).toEqual([expect.objectContaining({ schema_name: 'SYSIBM', table_name: 'SYSDUMMY1', column_name: 'IBMREQD', data_type: 'CHAR', foreign_keys: [] })]);
 
         expect(await driver.tableColumnTypes('SYSIBM.SYSDUMMY1')).toEqual([{ name: 'IBMREQD', type: 'text' }]);
-        expect(await driver.getTablesQuery('SYSIBM')).toContainEqual({ table_name: 'SYSDUMMY1' });
+        // Folded (upper-case) names come back lower-case, as Cube's pre-aggregation loader expects.
+        expect(await driver.getTablesQuery('SYSIBM')).toContainEqual({ table_name: 'sysdummy1' });
       });
 
       it('primary-key catalog query runs (KEYSEQ exists on this platform)', async () => {
