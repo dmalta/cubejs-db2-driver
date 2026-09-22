@@ -23,6 +23,48 @@ npm approve-scripts ibm_db
 `ibm_db` downloads IBM's CLI driver (`clidriver`) in its install script. If your npm blocks
 install scripts, the driver never materialises until the script is approved.
 
+Cube itself (`@cubejs-backend/server`) provides the driver's `@cubejs-backend/*` peer
+dependencies.
+
+### Without the npm alias
+
+If the package is installed under its own name, point Cube at it in `cube.js`:
+
+```js
+const Db2Driver = require('@dmalta/db2-cubejs-driver');
+
+module.exports = {
+  driverFactory: ({ dataSource }) => new Db2Driver({ dataSource }),
+  dialectFactory: () => Db2Driver.dialectClass(),
+};
+```
+
+Leave `CUBEJS_DB_TYPE` unset and set `CUBEJS_CONCURRENCY` (2 is the driver's default).
+Otherwise Cube looks the driver up by type to read its default concurrency, and fails with
+`Unsupported db type`.
+
+### Docker
+
+The official `cubejs/cube` image can't install `ibm_db` for `linux/arm64` (IBM ships no
+clidriver for it), so build for `linux/amd64`. On Apple silicon it runs emulated.
+[`docker/Dockerfile`](docker/Dockerfile) extends the official image. It installs the driver
+into `/cube/conf/node_modules` without duplicating Cube's own packages, and adds `libxml2`,
+which the clidriver needs on Linux:
+
+```bash
+docker build --platform=linux/amd64 -t cube-db2 docker/
+```
+
+```bash
+docker run --platform=linux/amd64 -p 4000:4000 --env-file .env \
+  -v "$PWD/model:/cube/conf/model" -v "$PWD/licenses:/db2-license:ro" -v "$PWD/certs:/certs:ro" \
+  cube-db2
+```
+
+License files mounted at `/db2-license` are copied into the clidriver at startup, so they never
+have to be baked into the image. The clidriver directory must stay writable, because it records
+the license there on first connect.
+
 ### Platforms
 
 | Platform | Supported |
@@ -86,6 +128,12 @@ CUBEJS_DS_LUW_DB_NAME=SAMPLE
 
 Use CLI keywords only: JDBC-style keywords such as `sslConnection=true` are silently ignored by
 the CLI driver and leave the connection unencrypted.
+
+If a connection over TLS fails with what looks like a password error, check the certificate first:
+`SSLServerCertificate` must point at the **root** CA. If the certificate's name doesn't match the
+host you connect to, the handshake fails (hostname validation is on by default in clidriver 12.1);
+connect via the certificate's host name, or set `CUBEJS_DB_DB2_SSL_HOSTNAME_VALIDATION=OFF` on a
+trusted network.
 
 ## Pre-aggregations
 

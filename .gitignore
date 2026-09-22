@@ -5,3 +5,5 @@ dist/
 !.env.example
 *.log
 coverage/
+docker/packages/*
+!docker/packages/.gitkeep

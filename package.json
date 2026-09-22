@@ -21,7 +21,9 @@
   },
   "files": [
     "dist/src",
-    "index.js"
+    "index.js",
+    "bin/post-install.js",
+    "LICENSE"
   ],
   "main": "index.js",
   "typings": "dist/src/index.d.ts",
@@ -39,13 +41,16 @@
     "test": "vitest run --project unit",
     "test:unit": "vitest run --project unit",
     "test:integration": "DB2_REAL_TEST=true vitest run --project integration",
-    "prepublishOnly": "npm run build && npm run test:unit"
+    "prepublishOnly": "npm run build && npm run test:unit",
+    "postinstall": "node bin/post-install.js"
   },
   "dependencies": {
-    "@cubejs-backend/base-driver": "^1.7.43",
-    "@cubejs-backend/schema-compiler": "^1.7.43",
-    "@cubejs-backend/shared": "^1.7.43",
     "moment-timezone": "^0.5.48"
+  },
+  "peerDependencies": {
+    "@cubejs-backend/base-driver": "^1.7.0",
+    "@cubejs-backend/schema-compiler": "^1.7.0",
+    "@cubejs-backend/shared": "^1.7.0"
   },
   "optionalDependencies": {
     "ibm_db": "^4.0.1"
@@ -53,7 +58,10 @@
   "devDependencies": {
     "@types/node": "^22.20.4",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "@cubejs-backend/base-driver": "^1.7.43",
+    "@cubejs-backend/schema-compiler": "^1.7.43",
+    "@cubejs-backend/shared": "^1.7.43"
   },
   "allowScripts": {
     "ibm_db@4.0.1": true
