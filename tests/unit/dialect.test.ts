@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildRowRenamer, MAX_COLUMN_NAME_BYTES, shortenLongIdentifiers, shortIdentifier } from '../../src/aliases';
 import { labeledDurations } from '../../src/Db2Query';
+import { castTimestampOperands, markTimestampOperand, unmarkTimestampOperands } from '../../src/timestampOperands';
 import { cases } from '../support/cases';
 import { buildSql, Planner, queryFor } from '../support/model';
 
@@ -52,10 +53,33 @@ describe('Db2Query SQL generation', () => {
 
   it('shifts timestamps by the zone offset for convertTz', async () => {
     const utc = await queryFor({ measures: ['orders.count'], timezone: 'UTC' }, 'legacy');
-    expect(utc.convertTz('x')).toBe('x');
+    expect(unmarkTimestampOperands(utc.convertTz('x'))).toBe('x');
     const kolkata = await queryFor({ measures: ['orders.count'], timezone: 'Asia/Kolkata' }, 'legacy');
-    expect(kolkata.convertTz('x')).toBe('(x + 330 MINUTES)');
+    expect(kolkata.convertTz('x')).toBe('(TIMESTAMP(x) + 330 MINUTES)');
   });
+
+  for (const planner of ['legacy', 'tesseract'] as Planner[]) {
+    it(`${planner}: marks time filter columns, so DATE columns can be retried wrapped`, async () => {
+      const [sql] = await buildSql({
+        measures: ['orders.count'],
+        timeDimensions: [{ dimension: 'orders.created_on', granularity: 'month', dateRange: ['2026-01-01', '2026-03-31'] }],
+        filters: [
+          { member: 'orders.created_at', operator: 'beforeDate', values: ['2026-03-01T00:00:00.000'] },
+          { member: 'orders.amount', operator: 'gt', values: ['10'] },
+        ],
+        timezone: 'UTC',
+      }, planner);
+      const bare = unmarkTimestampOperands(sql);
+      expect(bare).toMatch(/"orders"\.CREATED_ON >= CAST\(\? AS TIMESTAMP\) AND "orders"\.CREATED_ON <= CAST\(\? AS TIMESTAMP\)/);
+      expect(bare).toMatch(/"orders"\.CREATED_AT < CAST\(\? AS TIMESTAMP\)/);
+      expect(bare).toContain('TRUNC_TIMESTAMP(TIMESTAMP("orders".CREATED_ON), \'MM\')');
+      const cast = castTimestampOperands(sql);
+      expect(cast).toMatch(/TIMESTAMP\("orders"\.CREATED_ON\) >= CAST\(\? AS TIMESTAMP\)/);
+      expect(cast).toMatch(/TIMESTAMP\("orders"\.CREATED_AT\) < CAST\(\? AS TIMESTAMP\)/);
+      // Number filters share Tesseract's comparison templates; they are not marked.
+      expect(cast).toMatch(/"orders"\.AMOUNT > \?/);
+    });
+  }
 
   it('builds FETCH FIRST / OFFSET clauses with literal counts', async () => {
     const q = await queryFor({ measures: ['orders.count'] }, 'legacy');
@@ -63,6 +87,16 @@ describe('Db2Query SQL generation', () => {
     expect(q.limitOffsetClause(10, 5)).toBe(' OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY');
     expect(q.limitOffsetClause(null, 5)).toBe(' OFFSET 5 ROWS');
     expect(q.limitOffsetClause(null, null)).toBe('');
+  });
+});
+
+describe('time dimension operand markers', () => {
+  it('unmarks or wraps marked operands, innermost first', () => {
+    const inner = markTimestampOperand('"t".D');
+    const sql = `SELECT ${markTimestampOperand(`TRUNC_TIMESTAMP(${inner}, 'MM')`)} FROM t WHERE ${inner} >= CAST(? AS TIMESTAMP)`;
+    expect(unmarkTimestampOperands(sql)).toBe('SELECT TRUNC_TIMESTAMP("t".D, \'MM\') FROM t WHERE "t".D >= CAST(? AS TIMESTAMP)');
+    expect(castTimestampOperands(sql))
+      .toBe('SELECT TIMESTAMP(TRUNC_TIMESTAMP(TIMESTAMP("t".D), \'MM\')) FROM t WHERE TIMESTAMP("t".D) >= CAST(? AS TIMESTAMP)');
   });
 });
 

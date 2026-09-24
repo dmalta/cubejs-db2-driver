@@ -5,11 +5,17 @@
  * and on DB2 LUW 11.x alike (see docs/db2-validation.md): no LIMIT/OFFSET
  * keywords, no VALUES table constructor, no positional GROUP BY, no
  * parameter markers in DDL or select lists, and timestamps without a 'Z'.
+ *
+ * A time dimension may be a DATE column, which z/OS won't compare with a
+ * TIMESTAMP: expressions that already hide the column wrap it in TIMESTAMP(),
+ * and compared columns are marked for the driver (see timestampOperands.ts).
  */
 
 import { BaseFilter, BaseQuery, UserError } from '@cubejs-backend/schema-compiler';
 import { getEnv, MAX_SOURCE_ROW_LIMIT, parseSqlInterval, QueryAlias } from '@cubejs-backend/shared';
 import moment from 'moment-timezone';
+
+import { markedColumnTemplate, markedComparisonTemplate, markTimestampOperand } from './timestampOperands';
 
 const DUMMY = 'SYSIBM.SYSDUMMY1';
 
@@ -100,17 +106,43 @@ export class Db2Query extends BaseQuery {
     return `CAST(${value} AS TIMESTAMP)`;
   }
 
+  public timeRangeFilter(dimensionSql: string, from: string, to: string): string {
+    return super.timeRangeFilter(markTimestampOperand(dimensionSql), from, to);
+  }
+
+  public timeNotInRangeFilter(dimensionSql: string, from: string, to: string): string {
+    return super.timeNotInRangeFilter(markTimestampOperand(dimensionSql), from, to);
+  }
+
+  public beforeDateFilter(dimensionSql: string, param: string): string {
+    return super.beforeDateFilter(markTimestampOperand(dimensionSql), param);
+  }
+
+  public beforeOrOnDateFilter(dimensionSql: string, param: string): string {
+    return super.beforeOrOnDateFilter(markTimestampOperand(dimensionSql), param);
+  }
+
+  public afterDateFilter(dimensionSql: string, param: string): string {
+    return super.afterDateFilter(markTimestampOperand(dimensionSql), param);
+  }
+
+  public afterOrOnDateFilter(dimensionSql: string, param: string): string {
+    return super.afterOrOnDateFilter(markTimestampOperand(dimensionSql), param);
+  }
+
   /**
    * DB2 for z/OS has no time zone database. Timestamps are shifted by the
    * query time zone's current UTC offset: exact for fixed-offset zones, and
    * off by the DST difference for rows on the other side of a transition.
+   * Unshifted, the field is marked: the legacy planner compares it in rolling
+   * window joins.
    */
   public convertTz(field: string): string {
     const minutes = this.timezoneOffsetMinutes();
     if (!minutes) {
-      return field;
+      return markTimestampOperand(field);
     }
-    return `(${field} ${minutes > 0 ? '+' : '-'} ${Math.abs(minutes)} MINUTES)`;
+    return `(TIMESTAMP(${field}) ${minutes > 0 ? '+' : '-'} ${Math.abs(minutes)} MINUTES)`;
   }
 
   protected timezoneOffsetMinutes(): number {
@@ -130,14 +162,15 @@ export class Db2Query extends BaseQuery {
     if (!granularity) {
       return dimension;
     }
+    const ts = `TIMESTAMP(${dimension})`;
     if (granularity === 'second') {
-      return `(${dimension} - MICROSECOND(${dimension}) MICROSECONDS)`;
+      return `(${ts} - MICROSECOND(${ts}) MICROSECONDS)`;
     }
     const format = GRANULARITY_TO_TRUNC_FORMAT[granularity];
     if (!format) {
       throw new UserError(`Granularity "${granularity}" is not supported by the DB2 dialect`);
     }
-    return `TRUNC_TIMESTAMP(${dimension}, '${format}')`;
+    return `TRUNC_TIMESTAMP(${ts}, '${format}')`;
   }
 
   /**
@@ -150,12 +183,13 @@ export class Db2Query extends BaseQuery {
     const seconds = (parsed.week || 0) * 604800 + (parsed.day || 0) * 86400 +
       (parsed.hour || 0) * 3600 + (parsed.minute || 0) * 60 + (parsed.second || 0);
     const originTs = `CAST('${origin.replace(/Z$/, '')}' AS TIMESTAMP)`;
+    const sourceTs = `TIMESTAMP(${source})`;
 
     if (months > 0 && seconds === 0) {
-      return `(${originTs} + (FLOOR(CAST(${monthsBetween(originTs, source)} AS DOUBLE) / ${months}) * ${months}) MONTHS)`;
+      return `(${originTs} + (FLOOR(CAST(${monthsBetween(originTs, sourceTs)} AS DOUBLE) / ${months}) * ${months}) MONTHS)`;
     }
     if (seconds > 0 && months === 0) {
-      return `(${originTs} + BIGINT(FLOOR(CAST(${secondsBetween(originTs, source)} AS DOUBLE) / ${seconds}) * ${seconds}) SECONDS)`;
+      return `(${originTs} + BIGINT(FLOOR(CAST(${secondsBetween(originTs, sourceTs)} AS DOUBLE) / ${seconds}) * ${seconds}) SECONDS)`;
     }
     throw new UserError(`Mixed month and time intervals are not supported for DB2 custom granularities: ${interval}`);
   }
@@ -355,6 +389,13 @@ export class Db2Query extends BaseQuery {
       '{% endfor %}' +
       ') AS {{ group.alias }}\n' +
       '{% endfor %}';
+
+    templates.filters.time_range_filter = markedColumnTemplate(templates.filters.time_range_filter);
+    templates.filters.time_not_in_range_filter = markedColumnTemplate(templates.filters.time_not_in_range_filter);
+    templates.filters.gt = markedComparisonTemplate('>');
+    templates.filters.gte = markedComparisonTemplate('>=');
+    templates.filters.lt = markedComparisonTemplate('<');
+    templates.filters.lte = markedComparisonTemplate('<=');
 
     templates.expressions.like = '{{ expr }} {% if negated %}NOT {% endif %}LIKE {{ pattern }}{% if default_escape %} ESCAPE \'\\\'{% endif %}';
     delete templates.expressions.ilike;
