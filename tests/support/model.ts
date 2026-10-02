@@ -5,6 +5,8 @@
  * The data is a UNION ALL of literal rows from SYSIBM.SYSDUMMY1, so it needs
  * no tables and exists on every DB2 platform. Every UNION branch names its
  * columns: z/OS only names a union column when every branch does.
+ * CREATED_ON is CREATED_AT's DATE: z/OS won't compare a DATE with the
+ * TIMESTAMP parameters of time filters (see src/timestampOperands.ts).
  */
 import { compile } from '@cubejs-backend/schema-compiler';
 
@@ -51,7 +53,8 @@ const ts = (s: string) => `CAST(${q(s.replace(' ', '-').replace(/:/g, '.'))} AS 
 
 function ordersSql(): string {
   return ORDERS.map(o => `SELECT ${o.id} AS ID, CAST(${q(o.status)} AS VARCHAR(40)) AS STATUS, ` +
-    `CAST(${o.amount} AS DECIMAL(10,2)) AS AMOUNT, ${ts(o.createdAt)} AS CREATED_AT FROM SYSIBM.SYSDUMMY1`)
+    `CAST(${o.amount} AS DECIMAL(10,2)) AS AMOUNT, ${ts(o.createdAt)} AS CREATED_AT, ` +
+    `DATE(${ts(o.createdAt)}) AS CREATED_ON FROM SYSIBM.SYSDUMMY1`)
     .join(' UNION ALL ');
 }
 
@@ -96,6 +99,7 @@ cube('orders', {
         twelve_hours: { interval: '12 hours', origin: '2026-01-01' },
       },
     },
+    created_on: { sql: 'CREATED_ON', type: 'time' },
     size: {
       type: 'string',
       case: {

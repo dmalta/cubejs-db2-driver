@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Db2Driver, isReadOnlyStatement, parseSchemaList, splitTableName, wrapWithFetchFirst } from '../../src/Db2Driver';
 import { Db2Query } from '../../src/Db2Query';
 import { setIbmDbModule } from '../../src/ibm';
+import { markTimestampOperand } from '../../src/timestampOperands';
 import { baseConfig, col, db2Error, Handler, mockIbmDb } from './mock-ibm';
 
 let driver: Db2Driver | null = null;
@@ -46,6 +47,37 @@ describe('Db2Driver.query', () => {
   it('returns [] for statements without a result set', async () => {
     const { driver: d } = makeDriver(() => ({ meta: [] }));
     expect(await d.query('DROP TABLE X', [])).toEqual([]);
+  });
+
+  it('sends marked time dimension columns bare, and wrapped in TIMESTAMP() after SQLCODE -401', async () => {
+    const { driver: d, connections } = makeDriver(sql => (/"t"\.D >= /.test(sql)
+      ? { error: db2Error(-401, '42818') }
+      : { meta: [col('n', 'INTEGER')], rows: [{ n: 1 }] }));
+    const sql = `SELECT COUNT(*) AS "n" FROM T AS "t" WHERE ${markTimestampOperand('"t".D')} >= CAST(? AS TIMESTAMP)`;
+
+    expect(await d.query(sql, ['2026-01-01T00:00:00.000'])).toEqual([{ n: 1 }]);
+    expect(await d.query(sql, ['2026-02-01T00:00:00.000'])).toEqual([{ n: 1 }]);
+
+    expect(connections).toHaveLength(1);
+    expect(connections[0].statements.map(s => s.sql)).toEqual([
+      'SELECT COUNT(*) AS "n" FROM T AS "t" WHERE "t".D >= CAST(? AS TIMESTAMP)',
+      'SELECT COUNT(*) AS "n" FROM T AS "t" WHERE TIMESTAMP("t".D) >= CAST(? AS TIMESTAMP)',
+      // Remembered: the next run of the statement goes straight to the wrapped form.
+      'SELECT COUNT(*) AS "n" FROM T AS "t" WHERE TIMESTAMP("t".D) >= CAST(? AS TIMESTAMP)',
+    ]);
+  });
+
+  it('sends marked columns bare when DB2 compares them, and does not retry other errors', async () => {
+    const { driver: d, connections } = makeDriver(sql => (sql.includes('BAD')
+      ? { error: db2Error(-206, '42703') }
+      : { meta: [col('n', 'INTEGER')], rows: [{ n: 1 }] }));
+    await d.query(`SELECT 1 AS "n" FROM T WHERE ${markTimestampOperand('TS')} >= CAST(? AS TIMESTAMP)`, ['x']);
+    await expect(d.query(`SELECT BAD FROM T WHERE ${markTimestampOperand('TS')} >= CAST(? AS TIMESTAMP)`, ['x']))
+      .rejects.toMatchObject({ sqlcode: -206 });
+    expect(connections[0].statements.map(s => s.sql)).toEqual([
+      'SELECT 1 AS "n" FROM T WHERE TS >= CAST(? AS TIMESTAMP)',
+      'SELECT BAD FROM T WHERE TS >= CAST(? AS TIMESTAMP)',
+    ]);
   });
 
   it('discards the connection after a positive-SQLCODE warning', async () => {

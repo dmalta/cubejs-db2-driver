@@ -175,6 +175,14 @@ is EBCDIC (or the reverse), which `CREATE TABLE … AS (…) WITH NO DATA` doesn
   has no `OFFSET`/`LIMIT` (`SQLCODE -4743`). `FETCH FIRST` limits work. For offsets, ask your
   DBA for `EXECUTE` on a driver package collection bound at `APPLCOMPAT(V12R1M500)` or later,
   and set `CUBEJS_DB_DB2_CURRENT_PACKAGE_SET` to it.
+- **DATE columns as time dimensions.** A `type: time` dimension can point straight at a DATE
+  column. DB2 for z/OS won't compare a DATE with Cube's TIMESTAMP filter values
+  (`SQLCODE -401`), so the driver sends time filters with the bare column first, which keeps
+  predicates on TIMESTAMP columns indexable. If z/OS rejects the statement, the driver runs it
+  again with those columns wrapped in `TIMESTAMP()`, and remembers to do so for that statement.
+  The price: one failed prepare per statement shape, an index on the DATE column itself isn't
+  used, and a query that filters a DATE and a TIMESTAMP column together wraps both. DB2 LUW
+  compares DATE with TIMESTAMP directly.
 - **`count_distinct_approx`** isn't supported: DB2 has no HyperLogLog functions.
 - **Long member names.** z/OS limits column names to 30 bytes. The driver rewrites longer
   aliases in the SQL it runs and maps result columns back, so this is transparent, but the SQL

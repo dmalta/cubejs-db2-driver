@@ -117,6 +117,62 @@ export function cases(): Case[] {
     });
   }
 
+  // A DATE column (orders.created_on): z/OS rejects comparing it with the
+  // TIMESTAMP parameters, so the driver retries with TIMESTAMP(CREATED_ON).
+  const day = (o: Order) => truncate(utc(o.createdAt), 'day');
+  const onDays = (o: Order, from: string, to: string) => day(o) >= utc(`${from} 00:00:00`) && day(o) <= utc(`${to} 00:00:00`);
+  list.push({
+    name: 'DATE column: date range',
+    query: { measures: ['orders.count'], timeDimensions: [{ dimension: 'orders.created_on', dateRange: ['2026-01-05', '2026-02-01'] }], timezone: 'UTC' },
+    expected: [{ orders__count: all.filter(o => onDays(o, '2026-01-05', '2026-02-01')).length }],
+  });
+  for (const g of ['day', 'month']) {
+    list.push({
+      name: `DATE column: date range, granularity ${g}`,
+      query: {
+        measures: ['orders.count'],
+        timeDimensions: [{ dimension: 'orders.created_on', granularity: g, dateRange: ['2026-01-01', '2026-06-30'] }],
+        timezone: 'UTC',
+      },
+      expected: groupBy(all.filter(o => onDays(o, '2026-01-01', '2026-06-30')), o => fmt(truncate(day(o), g)),
+        os => ({ orders__count: os.length }), `orders__created_on_${g}`),
+    });
+  }
+  list.push({
+    name: 'DATE column: date range, granularity day, time zone Asia/Kolkata',
+    query: {
+      measures: ['orders.count'],
+      timeDimensions: [{ dimension: 'orders.created_on', granularity: 'day', dateRange: ['2026-01-01', '2026-06-30'] }],
+      timezone: 'Asia/Kolkata',
+    },
+    // Dates are midnights shifted into the zone: the range and the day stay put.
+    expected: groupBy(all.filter(o => onDays(o, '2026-01-01', '2026-06-30')), o => fmt(day(o)),
+      os => ({ orders__count: os.length }), 'orders__created_on_day'),
+  });
+  list.push({
+    name: 'DATE and TIMESTAMP columns filtered in one query',
+    query: {
+      measures: ['orders.count'],
+      timeDimensions: [{ dimension: 'orders.created_on', dateRange: ['2026-01-01', '2026-03-31'] }],
+      filters: [{ member: 'orders.created_at', operator: 'afterDate', values: ['2026-01-05T12:00:00.000'] }],
+      timezone: 'UTC',
+    },
+    expected: [{ orders__count: all.filter(o => onDays(o, '2026-01-01', '2026-03-31') && utc(o.createdAt) > utc('2026-01-05 12:00:00')).length }],
+  });
+  list.push({
+    name: 'DATE column: rolling window (7 day trailing)',
+    query: {
+      measures: ['orders.rolling_amount_7d'],
+      timeDimensions: [{ dimension: 'orders.created_on', granularity: 'day', dateRange: ['2026-01-10', '2026-01-13'] }],
+      timezone: 'UTC',
+    },
+    expected: ['2026-01-10', '2026-01-11', '2026-01-12', '2026-01-13'].map(d => {
+      const end = utc(`${d} 00:00:00`).getTime();
+      const os = all.filter(o => day(o).getTime() > end - 7 * 86400000 && day(o).getTime() <= end);
+      return { orders__created_on_day: fmt(utc(`${d} 00:00:00`)), orders__rolling_amount_7d: os.length ? sum(os) : null };
+    }),
+  });
+
   const filterCase = (name: string, filter: Row, pred: (o: Order) => boolean) => list.push({
     name: `filter ${name}`,
     query: { measures: ['orders.count'], filters: [filter] },
@@ -145,6 +201,14 @@ export function cases(): Case[] {
   // An explicit time: for a bare date the legacy planner compares against the
   // start of the day and Tesseract against its end (Cube behaviour, any dialect).
   filterCase('afterDate', { member: 'orders.created_at', operator: 'afterDate', values: ['2026-12-31T23:30:00.000'] }, o => utc(o.createdAt) > utc('2026-12-31 23:30:00'));
+  filterCase('DATE column: inDateRange', { member: 'orders.created_on', operator: 'inDateRange', values: ['2026-01-05', '2026-01-12'] },
+    o => onDays(o, '2026-01-05', '2026-01-12'));
+  filterCase('DATE column: notInDateRange', { member: 'orders.created_on', operator: 'notInDateRange', values: ['2026-01-05', '2026-01-12'] },
+    o => !onDays(o, '2026-01-05', '2026-01-12'));
+  filterCase('DATE column: beforeDate', { member: 'orders.created_on', operator: 'beforeDate', values: ['2026-02-01T00:00:00.000'] },
+    o => day(o) < utc('2026-02-01 00:00:00'));
+  filterCase('DATE column: afterDate', { member: 'orders.created_on', operator: 'afterDate', values: ['2026-12-31T00:00:00.000'] },
+    o => day(o) > utc('2026-12-31 00:00:00'));
   filterCase('measure filter (HAVING)', { member: 'orders.total_amount', operator: 'gt', values: ['0'] }, () => true);
 
   list.push({

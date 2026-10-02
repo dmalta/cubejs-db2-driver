@@ -41,6 +41,7 @@ export const DB2_ERROR_NAMES: Record<number, string> = {
   [-203]: 'AMBIGUOUS_COLUMN_REFERENCE',
   [-204]: 'OBJECT_NOT_FOUND',
   [-206]: 'COLUMN_NOT_FOUND',
+  [-401]: 'INCOMPARABLE_OPERANDS',
   [-245]: 'AMBIGUOUS_FUNCTION_ARGUMENT',
   [-417]: 'PARAMETER_MARKERS_AS_OPERANDS',
   [-418]: 'UNTYPED_PARAMETER_MARKER',
@@ -105,6 +106,11 @@ export function isConnectionLost(error: unknown): boolean {
 export function isLockTimeout(error: unknown): boolean {
   const code = getSqlCode(error);
   return code !== undefined && LOCK_CODES.has(code);
+}
+
+/** Operands not comparable, e.g. a DATE with a TIMESTAMP on z/OS. */
+export function isIncomparable(error: unknown): boolean {
+  return getSqlCode(error) === -401;
 }
 
 export function isObjectNotFound(error: unknown): boolean {

@@ -25,11 +25,12 @@ import {
   readDb2Env,
 } from './connection';
 import { buildRowRenamer, shortenLongIdentifiers } from './aliases';
-import { describeError, isConnectionLost, isObjectNotFound, isWarning } from './errors';
+import { describeError, isConnectionLost, isIncomparable, isObjectNotFound, isWarning } from './errors';
 import { Db2ColumnMetadata, Db2Connection, Db2Result, keepLoopAwake, loadIbmDb } from './ibm';
 import { Db2Query } from './Db2Query';
 import { closeQuietly, QueryStream } from './QueryStream';
 import { buildRowTransform, colTypeToGeneric, fetchAllRows, metadataToTypes } from './rows';
+import { castTimestampOperands, hasTimestampOperands, unmarkTimestampOperands } from './timestampOperands';
 
 export type Db2DriverConfiguration = Db2ConnectionConfig & {
   dataSource?: string;
@@ -248,7 +249,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
 
     let result: Db2Result | null;
     try {
-      [result] = await keepLoopAwake(() => pc.conn.queryResult(query, values));
+      result = await this.runStatement(pc, query, values);
     } catch (e) {
       if (isWarning(e) || isConnectionLost(e)) {
         pc.disposed = true;
@@ -546,7 +547,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
           pc.disposed = true;
           throw new Error('Query was canceled');
         }
-        const [result] = await keepLoopAwake(() => pc.conn.queryResult(query, values));
+        const result = await this.runStatement(pc, query, values);
         if (!result) {
           return (await read(emptyResult(), rename)) as T;
         }
@@ -583,6 +584,39 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
       }
     };
     return promise;
+  }
+
+  /**
+   * Statements whose marked time dimension operands must be wrapped in
+   * TIMESTAMP(), by their bare text (see timestampOperands.ts).
+   */
+  private readonly timestampCastStatements = new Set<string>();
+
+  /**
+   * Runs a statement, sending marked time dimension operands bare, and again
+   * wrapped in TIMESTAMP() if DB2 won't compare them (DATE columns on z/OS).
+   */
+  protected async runStatement(pc: PooledConnection, sql: string, values: unknown[]): Promise<Db2Result | null> {
+    const run = async (text: string) => (await keepLoopAwake(() => pc.conn.queryResult(text, values)))[0];
+    if (!hasTimestampOperands(sql)) {
+      return run(sql);
+    }
+    const bare = unmarkTimestampOperands(sql);
+    if (this.timestampCastStatements.has(bare)) {
+      return run(castTimestampOperands(sql));
+    }
+    try {
+      return await run(bare);
+    } catch (e) {
+      if (!isIncomparable(e)) {
+        throw e;
+      }
+      if (this.timestampCastStatements.size >= 1000) {
+        this.timestampCastStatements.clear();
+      }
+      this.timestampCastStatements.add(bare);
+      return run(castTimestampOperands(sql));
+    }
   }
 
   protected async readAll(
