@@ -53,6 +53,11 @@ export type Db2DriverConfiguration = Db2ConnectionConfig & {
    * can hold tens of thousands of tables; all non-system schemas by default.
    */
   schemas?: string[];
+  /**
+   * Turn autocommit on for every new connection (default true;
+   * CUBEJS_DB_DB2_AUTOCOMMIT=false opts out). See the pool's create().
+   */
+  autocommit?: boolean;
 };
 
 interface PooledConnection {
@@ -90,6 +95,10 @@ const GENERIC_TO_DB2: Record<string, string> = {
   time: 'TIME',
   uuid: 'CHAR(36)',
 };
+
+/** ODBC connection attribute and value (sqlext.h) for autocommit. */
+export const SQL_ATTR_AUTOCOMMIT = 102;
+export const SQL_AUTOCOMMIT_ON = 1;
 
 const DEFAULT_MAX_CONNECTION_AGE_MS = 30 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -153,6 +162,7 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
       preAggregationDatabase: readDb2Env('preAggregationDatabase', dataSource, false),
       preAggregationTablespace: readDb2Env('preAggregationTablespace', dataSource, false),
       schemas: parseSchemaList(readDb2Env('schemas', dataSource, false)),
+      autocommit: parseAutocommit(readDb2Env('autocommit', dataSource, preAggregations)),
       connectTimeout: envTimeout ? parseInt(envTimeout, 10) : 30,
       maxConnectionAgeMs: DEFAULT_MAX_CONNECTION_AGE_MS,
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
@@ -175,6 +185,23 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
             const conn = await keepLoopAwake(() => ibmdb.open(this.connectionString, {
               connectTimeout: this.config.connectTimeout,
             }));
+            // On DB2 for z/OS a connection left out of autocommit keeps its unit of
+            // work, and its locks (e.g. the DBD share lock with CACHEDYN=NO), open
+            // until commit, blocking other sessions' CREATE/DROP. The CLI default is
+            // autocommit on, but db2cli.ini or the connection string can change it,
+            // so set it explicitly. A connection that can't be switched is closed.
+            if (this.config.autocommit !== false) {
+              try {
+                await keepLoopAwake(() => conn.setAttr(SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_ON));
+              } catch (e) {
+                try {
+                  await keepLoopAwake(() => conn.close());
+                } catch {
+                  // Already unusable; the create fails either way.
+                }
+                throw e;
+              }
+            }
             return { conn, createdAt: Date.now(), disposed: false };
           } catch (e) {
             throw describeError(e);
@@ -706,6 +733,13 @@ export function columnDefinitionType(c: Db2ColumnMetadata): string {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Reads CUBEJS_DB_DB2_AUTOCOMMIT: on unless set to false/0/off/no.
+ */
+export function parseAutocommit(value: string | undefined): boolean {
+  return value === undefined || !/^(false|0|off|no)$/i.test(value.trim());
 }
 
 /** 'A, b ,C' → ['A', 'B', 'C'] (folded like unquoted identifiers); undefined when empty. */

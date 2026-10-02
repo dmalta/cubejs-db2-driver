@@ -40,6 +40,8 @@ export interface Db2Connection {
   beginTransaction(): Promise<boolean>;
   commitTransaction(): Promise<boolean>;
   rollbackTransaction(): Promise<boolean>;
+  /** Sets a connection attribute (SQLSetConnectAttr), e.g. SQL_ATTR_AUTOCOMMIT. */
+  setAttr(attr: number, value: number | string | null): Promise<boolean>;
   close(): Promise<boolean>;
 }
 

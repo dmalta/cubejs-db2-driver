@@ -64,6 +64,16 @@ export class MockConnection implements Db2Connection {
 
   public async rollbackTransaction() { return true; }
 
+  public autocommit = false;
+
+  public attrs: [number, unknown][] = [];
+
+  public async setAttr(attr: number, value: number | string | null) {
+    this.attrs.push([attr, value]);
+    if (attr === 102) this.autocommit = value === 1;
+    return true;
+  }
+
   public async close() {
     this.closed = true;
     this.connected = false;

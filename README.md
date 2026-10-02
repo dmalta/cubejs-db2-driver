@@ -103,6 +103,7 @@ license.
 | `CUBEJS_DB_DB2_CURRENT_SCHEMA` | default schema for unqualified names |
 | `CUBEJS_DB_DB2_CURRENT_PACKAGE_SET` | driver package collection, e.g. one bound at a higher `APPLCOMPAT` (z/OS) |
 | `CUBEJS_DB_DB2_CONNECT_TIMEOUT` | seconds (default 30) |
+| `CUBEJS_DB_DB2_AUTOCOMMIT` | `false` leaves new connections in the mode the CLI opens them in. Default: the driver turns autocommit on for every connection, so no statement leaves a unit of work (and its locks) open on the server |
 | `CUBEJS_DB_DB2_SCHEMAS` | comma-separated schemas to introspect (Playground, data model generation). A z/OS catalog can hold tens of thousands of tables: all 37K took 55 s, one schema 4 s |
 | `CUBEJS_DB_DB2_EXTRA` | raw `KEY=VALUE;…` CLI keywords appended to the connection string |
 

@@ -48,6 +48,7 @@ export const DB2_ENV_VARIABLES = {
   schemas: 'CUBEJS_DB_DB2_SCHEMAS',
   preAggregationDatabase: 'CUBEJS_DB_DB2_PREAGG_DATABASE',
   preAggregationTablespace: 'CUBEJS_DB_DB2_PREAGG_TABLESPACE',
+  autocommit: 'CUBEJS_DB_DB2_AUTOCOMMIT',
 } as const;
 
 export type Db2EnvKey = keyof typeof DB2_ENV_VARIABLES;

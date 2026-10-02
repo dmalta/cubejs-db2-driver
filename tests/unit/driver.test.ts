@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { Db2Driver, isReadOnlyStatement, parseSchemaList, splitTableName, wrapWithFetchFirst } from '../../src/Db2Driver';
+import { Db2Driver, isReadOnlyStatement, parseAutocommit, parseSchemaList, splitTableName, wrapWithFetchFirst } from '../../src/Db2Driver';
 import { Db2Query } from '../../src/Db2Query';
 import { setIbmDbModule } from '../../src/ibm';
 import { markTimestampOperand } from '../../src/timestampOperands';
@@ -137,6 +137,58 @@ describe('Db2Driver.query', () => {
     await p;
 
     expect(mock.connections[0].closed).toBe(true);
+  });
+});
+
+describe('Db2Driver autocommit', () => {
+  const ENV = 'CUBEJS_DB_DB2_AUTOCOMMIT';
+  afterEach(() => { delete process.env[ENV]; });
+
+  it('turns autocommit on for every new connection by default', async () => {
+    const { driver: d, connections } = makeDriver(() => ({ meta: [col('a', 'INTEGER')], rows: [{ a: 1 }] }));
+    await d.query('SELECT 1', []);
+    expect(connections[0].attrs).toEqual([[102, 1]]);
+    expect(connections[0].autocommit).toBe(true);
+  });
+
+  it('leaves the connection untouched with autocommit: false', async () => {
+    const { driver: d, connections } = makeDriver(() => ({ rows: [] }), { autocommit: false });
+    await d.query('SELECT 1', []);
+    expect(connections[0].attrs).toEqual([]);
+  });
+
+  it('reads CUBEJS_DB_DB2_AUTOCOMMIT=false as an opt-out', async () => {
+    process.env[ENV] = 'false';
+    const { driver: d, connections } = makeDriver(() => ({ rows: [] }));
+    await d.query('SELECT 1', []);
+    expect(connections[0].attrs).toEqual([]);
+  });
+
+  it('closes the connection and fails the create when autocommit cannot be set', async () => {
+    const mock = mockIbmDb(() => ({ rows: [] }));
+    const open = mock.module.open;
+    mock.module.open = async (dsn) => {
+      const c = await open(dsn);
+      c.setAttr = async () => { throw db2Error(-99999, 'HY000', 'setAttr failed'); };
+      return c;
+    };
+    setIbmDbModule(mock.module);
+    driver = new Db2Driver(baseConfig);
+
+    // Call the pool factory directly: through acquire(), generic-pool would
+    // retry the failing create until its timeout.
+    await expect((driver as any).pool._factory.create()).rejects.toThrow(/setAttr failed/);
+    expect(mock.connections).toHaveLength(1);
+    expect(mock.connections[0].closed).toBe(true);
+  });
+
+  it('parseAutocommit defaults to on and accepts false/0/off/no', () => {
+    expect(parseAutocommit(undefined)).toBe(true);
+    expect(parseAutocommit('true')).toBe(true);
+    expect(parseAutocommit('1')).toBe(true);
+    for (const v of ['false', 'FALSE', '0', 'off', 'no', ' no ']) {
+      expect(parseAutocommit(v)).toBe(false);
+    }
   });
 });
 
