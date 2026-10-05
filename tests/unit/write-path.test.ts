@@ -61,6 +61,18 @@ describe('loadPreAggregationIntoTable', () => {
     expect(connections.flatMap(c => c.statements).map(s => s.sql).pop()).toBe(`DROP TABLE ${table}`);
   });
 
+  it('keeps the table when the INSERT only warns that NULLs were eliminated (01003)', async () => {
+    const { driver: d, connections } = makeDriver((sql) => {
+      if (sql.includes('WHERE 1 = 0')) return { meta: [meta('a', 'INTEGER', 11)] };
+      if (sql.startsWith('INSERT')) return { error: db2Error(0, '01003') };
+      return { meta: [] };
+    });
+
+    await expect(d.loadPreAggregationIntoTable(table, `CREATE TABLE ${table} AS SELECT sum(x) AS "a" FROM X`, [], {}))
+      .resolves.toEqual([]);
+    expect(connections.flatMap(c => c.statements).map(s => s.sql).pop()).toBe(`INSERT INTO ${table} SELECT sum(x) AS "a" FROM X`);
+  });
+
   it('refuses load SQL it does not recognise instead of guessing', async () => {
     const { driver: d } = makeDriver(() => ({ meta: [] }));
     await expect(d.loadPreAggregationIntoTable(table, 'INSERT INTO x SELECT 1', [], {})).rejects.toThrow(/Unexpected pre-aggregation load SQL/);

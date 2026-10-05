@@ -25,7 +25,7 @@ import {
   readDb2Env,
 } from './connection';
 import { buildRowRenamer, shortenLongIdentifiers } from './aliases';
-import { describeError, isConnectionLost, isIncomparable, isObjectNotFound, isWarning } from './errors';
+import { describeError, isConnectionLost, isIncomparable, isNullsEliminated, isObjectNotFound, isWarning } from './errors';
 import { Db2ColumnMetadata, Db2Connection, Db2Result, keepLoopAwake, loadIbmDb } from './ibm';
 import { Db2Query } from './Db2Query';
 import { closeQuietly, QueryStream } from './QueryStream';
@@ -476,6 +476,12 @@ export class Db2Driver extends BaseDriver implements DriverInterface {
     try {
       await this.query(`INSERT INTO ${preAggregationTableName} ${select}`, params);
     } catch (e) {
+      // An aggregate that skipped NULLs (SUM over a filtered measure, MIN over
+      // a nullable date) raises 01003, which ibm_db reports as an error even
+      // though the INSERT completed (and, with autocommit, committed).
+      if (isNullsEliminated(e)) {
+        return [];
+      }
       await this.dropTable(preAggregationTableName).catch(() => undefined);
       throw e;
     }

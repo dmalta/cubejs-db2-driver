@@ -118,13 +118,22 @@ export function isObjectNotFound(error: unknown): boolean {
 }
 
 /**
- * A positive SQLCODE is a warning. ibm_db surfaces some of them (for example
- * SQL0347W) as errors, and can leave the handle warning-pending, so a
- * connection that produced one is discarded rather than reused.
+ * A positive SQLCODE, or SQLSTATE class 01, is a warning. ibm_db surfaces some
+ * of them (for example SQL0347W, or 01003 with SQLCODE 0) as errors, and can
+ * leave the handle warning-pending, so a connection that produced one is
+ * discarded rather than reused.
  */
 export function isWarning(error: unknown): boolean {
   const code = getSqlCode(error);
-  return code !== undefined && code > 0 && code !== 100;
+  return (code !== undefined && code > 0 && code !== 100) || (getSqlState(error) || '').startsWith('01');
+}
+
+/**
+ * SQLSTATE 01003: null values were eliminated from the argument of a column
+ * function. A warning: the statement completed.
+ */
+export function isNullsEliminated(error: unknown): boolean {
+  return getSqlState(error) === '01003';
 }
 
 /**
