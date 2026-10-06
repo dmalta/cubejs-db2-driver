@@ -1,47 +1,42 @@
-# @dmalta/db2-cubejs-driver
+# db2-cubejs-driver
+
+[![npm](https://img.shields.io/npm/v/db2-cubejs-driver)](https://www.npmjs.com/package/db2-cubejs-driver)
+[![CI](https://github.com/dmalta/cubejs-db2-driver/actions/workflows/ci.yml/badge.svg)](https://github.com/dmalta/cubejs-db2-driver/actions/workflows/ci.yml)
 
 A [Cube](https://cube.dev) data source driver for **IBM DB2 for z/OS** and **DB2 LUW**, built on
 [`ibm_db`](https://github.com/ibmdb/node-ibm_db).
 
-> Status: pre-release. Validated against DB2 12 for z/OS and DB2 11.x LUW with Cube 1.7: REST
+> Status: 0.x. Validated against DB2 12 for z/OS and DB2 11.x LUW with Cube 1.7: REST
 > and SQL API queries through both of Cube's planners, the Playground, and pre-aggregations in
 > Cube Store or in DB2 itself.
 
 ## Install
 
-Install the driver under the name Cube looks up for `CUBEJS_DB_TYPE=db2`, using an npm alias.
-With the alias, no `cube.js` configuration is needed:
-
 ```bash
-npm i db2-cubejs-driver@npm:@dmalta/db2-cubejs-driver ibm_db@4
+npm i db2-cubejs-driver ibm_db@4
 ```
 
-```bash
-npm approve-scripts ibm_db
-```
+Cube looks up `db2-cubejs-driver` by name when `CUBEJS_DB_TYPE=db2`, so no `cube.js`
+configuration is needed. Cube itself (`@cubejs-backend/server`) provides the driver's
+`@cubejs-backend/*` peer dependencies; the driver supports Cube `>=1.7.43 <1.8.0`.
 
-`ibm_db` downloads IBM's CLI driver (`clidriver`) in its install script. If your npm blocks
-install scripts, the driver never materialises until the script is approved.
+`ibm_db` is an optional dependency of the driver, but install it explicitly as above: if its
+native build fails, npm silently skips an optional dependency and the driver then fails at
+connect time with "Unable to load the ibm_db module".
 
-Cube itself (`@cubejs-backend/server`) provides the driver's `@cubejs-backend/*` peer
-dependencies.
+### `ibm_db` install requirements
 
-### Without the npm alias
+`ibm_db` compiles a native addon and downloads IBM's CLI driver (`clidriver`) from
+`public.dhe.ibm.com` in its install script. So:
 
-If the package is installed under its own name, point Cube at it in `cube.js`:
-
-```js
-const Db2Driver = require('@dmalta/db2-cubejs-driver');
-
-module.exports = {
-  driverFactory: ({ dataSource }) => new Db2Driver({ dataSource }),
-  dialectFactory: () => Db2Driver.dialectClass(),
-};
-```
-
-Leave `CUBEJS_DB_TYPE` unset and set `CUBEJS_CONCURRENCY` (2 is the driver's default).
-Otherwise Cube looks the driver up by type to read its default concurrency, and fails with
-`Unsupported db type`.
+- A build toolchain is required: `make`, `g++` and Python on Linux and macOS, or the Visual
+  Studio Build Tools on Windows.
+- If your package manager blocks install scripts, approve it (`npm approve-scripts ibm_db`, or
+  `allowBuilds: { ibm_db: true }` in pnpm 11), otherwise the clidriver is never downloaded.
+- Behind a proxy or offline, `ibm_db` reads `IBM_DB_INSTALLER_URL` (a mirror of the clidriver
+  archive) and `IBM_DB_HOME` (an existing clidriver install, used instead of downloading one).
+  `DOWNLOAD_CLIDRIVER=true` does the opposite: it ignores `IBM_DB_HOME` and downloads afresh.
+- `npm audit` may report advisories in `adm-zip`, which `ibm_db` pulls in transitively.
 
 ### Docker
 
@@ -59,7 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libxml2 \
 # --legacy-peer-deps: the driver's @cubejs-backend/* peers are the image's own copies
 # in /cube/node_modules (on NODE_PATH), so none get installed twice
 RUN npm install --prefix /cube/conf --legacy-peer-deps \
-  db2-cubejs-driver@npm:@dmalta/db2-cubejs-driver ibm_db@4
+  db2-cubejs-driver ibm_db@4
 ```
 
 Build it for `linux/amd64` — IBM ships no `clidriver` for `linux/arm64`, so that's the only
@@ -229,9 +224,12 @@ npm run test:integration      # against real DB2, configured in .env (see .env.e
 In VS Code, the recommended Vitest extension shows both suites in the Test Explorer. Integration
 tests are skipped there unless `DB2_REAL_TEST` is set to `true` in `.vscode/settings.json`.
 
-See [docs/db2-validation.md](docs/db2-validation.md) for the platform behaviour the driver is
-built on.
-
 ## License
 
-Apache-2.0
+Apache-2.0. See [LICENSE](LICENSE).
+
+This project is not affiliated with or endorsed by IBM. IBM and Db2 are trademarks of
+International Business Machines Corporation. The driver depends on
+[`ibm_db`](https://github.com/ibmdb/node-ibm_db) (MIT) and downloads IBM's Db2 CLI driver, which
+is licensed separately by IBM; connecting to DB2 for z/OS also needs a DB2 Connect license from
+IBM (see above).

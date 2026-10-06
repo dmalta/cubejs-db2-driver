@@ -2,7 +2,7 @@
  * @fileoverview DB2 SQL dialect for Cube's query planners.
  *
  * Targets SQL that works on DB2 for z/OS at application compatibility V10R1
- * and on DB2 LUW 11.x alike (see docs/db2-validation.md): no LIMIT/OFFSET
+ * and on DB2 LUW 11.x alike: no LIMIT/OFFSET
  * keywords, no VALUES table constructor, no positional GROUP BY, no
  * parameter markers in DDL or select lists, and timestamps without a 'Z'.
  *

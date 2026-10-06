@@ -277,7 +277,7 @@ export function cases(): Case[] {
     query: { dimensions: ['orders.id'], order: [['orders.id', 'asc']], limit: 3, offset: 2 },
     expected: byId.slice(2, 5).map(o => ({ orders__id: o.id })),
     ordered: true,
-    // OFFSET needs APPLCOMPAT V12R1M500 on z/OS; see docs/db2-validation.md #6.
+    // OFFSET needs APPLCOMPAT V12R1M500 on z/OS.
     expectError: { zos: -4743 },
   });
   list.push({

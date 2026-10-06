@@ -24,7 +24,7 @@ WORKDIR /cube/conf
 # Local tarballs (npm pack) for testing unreleased versions; empty otherwise.
 COPY packages/ /tmp/packages/
 
-ARG DRIVER_SPEC=db2-cubejs-driver@npm:@dmalta/db2-cubejs-driver
+ARG DRIVER_SPEC=db2-cubejs-driver
 ARG IBM_DB_VERSION=^4.0.1
 
 # --legacy-peer-deps: the driver's @cubejs-backend/* peers are the image's own
