@@ -18,7 +18,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       # ibm_db is optional and the unit tests mock it, so skip its native build.
+      # Cube's query planner needs its prebuilt @cubejs-backend/native binary,
+      # which that package downloads in its own postinstall.
       - run: npm ci --ignore-scripts
+      - run: npm rebuild @cubejs-backend/native
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
