@@ -45,25 +45,47 @@ Otherwise Cube looks the driver up by type to read its default concurrency, and 
 
 ### Docker
 
-The official `cubejs/cube` image can't install `ibm_db` for `linux/arm64` (IBM ships no
-clidriver for it), so build for `linux/amd64`. On Apple silicon it runs emulated.
-[`docker/Dockerfile`](docker/Dockerfile) extends the official image. It installs the driver
-into `/cube/conf/node_modules` without duplicating Cube's own packages, and adds `libxml2`,
-which the clidriver needs on Linux:
+There's no prebuilt image to pull — you add three lines to *your own* Dockerfile, on top of
+whatever official `cubejs/cube` image and version you already use. Nothing about Cube changes;
+this is the same pattern as `FROM python:3.12` then `pip install`:
+
+```dockerfile
+FROM cubejs/cube:v1.7.43
+
+# libxml2: runtime dependency of the clidriver's libdb2.so, not in the base image
+RUN apt-get update && apt-get install -y --no-install-recommends libxml2 \
+  && rm -rf /var/lib/apt/lists/*
+
+# --legacy-peer-deps: the driver's @cubejs-backend/* peers are the image's own copies
+# in /cube/node_modules (on NODE_PATH), so none get installed twice
+RUN npm install --prefix /cube/conf --legacy-peer-deps \
+  db2-cubejs-driver@npm:@dmalta/db2-cubejs-driver ibm_db@4
+```
+
+Build it for `linux/amd64` — IBM ships no `clidriver` for `linux/arm64`, so that's the only
+Linux architecture `ibm_db` supports. On Apple silicon it runs emulated:
 
 ```bash
-docker build --platform=linux/amd64 -t cube-db2 docker/
+docker build --platform=linux/amd64 -t your-cube-image .
 ```
+
+[`docker/Dockerfile`](docker/Dockerfile) is a complete, working example built the same way
+(plus an entrypoint for DB2 Connect licenses, below) — copy from it rather than build against
+it as a dependency.
+
+#### DB2 Connect licenses in a container (z/OS / IBM i only)
+
+Same requirement as the [native install](#db2-connect-license-zos-and-ibm-i-only) below, but
+don't bake the license into the image — mount it at runtime and copy it into the clidriver from
+your own entrypoint instead, since the clidriver directory must stay **writable** (it registers
+the license there on first connect). [`docker/db2-entrypoint.sh`](docker/db2-entrypoint.sh) is a
+minimal example:
 
 ```bash
 docker run --platform=linux/amd64 -p 4000:4000 --env-file .env \
-  -v "$PWD/model:/cube/conf/model" -v "$PWD/licenses:/db2-license:ro" -v "$PWD/certs:/certs:ro" \
-  cube-db2
+  -v "$PWD/model:/cube/conf/model" -v "$PWD/licenses:/db2-license:ro" \
+  your-cube-image
 ```
-
-License files mounted at `/db2-license` are copied into the clidriver at startup, so they never
-have to be baked into the image. The clidriver directory must stay writable, because it records
-the license there on first connect.
 
 ### Platforms
 
